@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { AlertCircle, CheckCircle, Radio, Clock } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
 
 interface Alert {
   id: number;
@@ -18,6 +19,28 @@ const Dashboard = () => {
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [currentStatus, setCurrentStatus] = useState<"safe" | "alert">("safe");
   const { toast } = useToast();
+
+  // Log alert to Google Sheets
+  const logAlertToSheets = async (alert: Alert) => {
+    try {
+      const { error } = await supabase.functions.invoke('log-alert', {
+        body: {
+          timestamp: alert.timestamp,
+          type: alert.type,
+          message: alert.message,
+          sensor: alert.sensor,
+        },
+      });
+
+      if (error) {
+        console.error('Failed to log alert to Google Sheets:', error);
+      } else {
+        console.log('Alert logged to Google Sheets successfully');
+      }
+    } catch (err) {
+      console.error('Error logging alert:', err);
+    }
+  };
 
   // Simulate Bluetooth data feed
   const simulateAlert = () => {
@@ -41,6 +64,9 @@ const Dashboard = () => {
 
     setAlerts((prev) => [newAlert, ...prev].slice(0, 50));
     setCurrentStatus(type === "intrusion" ? "alert" : "safe");
+
+    // Log to Google Sheets
+    logAlertToSheets(newAlert);
 
     if (type === "intrusion") {
       toast({
