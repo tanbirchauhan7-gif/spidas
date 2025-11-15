@@ -26,11 +26,15 @@ const Simulation = () => {
             <div className="text-center">
               <CircuitBoard className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
               <p className="text-muted-foreground mb-4">
-                Tinkercad simulation screenshot placeholder
+                PIR Sensor Circuit Design - Click below to view the interactive simulation
               </p>
-              <Button variant="outline" className="gap-2">
+              <Button 
+                variant="outline" 
+                className="gap-2"
+                onClick={() => window.open('https://www.tinkercad.com/things/5edidkIFTjM-copy-of-pir/editel?returnTo=https%3A%2F%2Fwww.tinkercad.com%2Fdashboard%2Fdesigns%2Fcircuits&sharecode=6IqMhbmHz4pFpBt4DepwtD-J9WYITM70LtDXIZzYIak', '_blank')}
+              >
                 <ExternalLink className="w-4 h-4" />
-                View on Tinkercad
+                Open in Tinkercad
               </Button>
             </div>
           </div>
