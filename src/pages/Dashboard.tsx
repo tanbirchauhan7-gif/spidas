@@ -1,8 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { AlertCircle, CheckCircle, Radio, Clock } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { AlertCircle, CheckCircle, Radio, Clock, Wifi, WifiOff } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -18,9 +19,12 @@ const Dashboard = () => {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [currentStatus, setCurrentStatus] = useState<"safe" | "alert">("safe");
+  const [wsUrl, setWsUrl] = useState("wss://unhurtful-drawn-tish.ngrok-free.dev");
+  const [isConnected, setIsConnected] = useState(false);
+  const wsRef = useRef<WebSocket | null>(null);
   const { toast } = useToast();
 
-  // Log alert to Google Sheets
+  // Log alert to Google Sheets (optional)
   const logAlertToSheets = async (alert: Alert) => {
     try {
       const { error } = await supabase.functions.invoke('log-alert', {
@@ -33,59 +37,142 @@ const Dashboard = () => {
       });
 
       if (error) {
-        console.error('Failed to log alert to Google Sheets:', error);
+        console.warn('Failed to log alert to Google Sheets:', error);
       } else {
         console.log('Alert logged to Google Sheets successfully');
       }
     } catch (err) {
-      console.error('Error logging alert:', err);
+      console.warn('Google Sheets logging unavailable:', err);
     }
   };
 
-  // Simulate Bluetooth data feed
-  const simulateAlert = () => {
-    const types: Array<"intrusion" | "safe"> = ["intrusion", "intrusion", "safe"];
-    const sensors = ["PIR Sensor", "Vibration Sensor", "Both Sensors"];
-    const messages = [
-      "Motion detected in Zone A",
-      "Perimeter breach detected",
-      "All systems normal",
-      "Vibration detected at fence line",
-    ];
+  // Parse incoming WebSocket message
+  const parseIncomingMessage = (data: any) => {
+    try {
+      let parsedData = typeof data === 'string' ? JSON.parse(data) : data;
+      
+      console.log('Received WebSocket data:', parsedData);
 
-    const type = types[Math.floor(Math.random() * types.length)];
-    const newAlert: Alert = {
-      id: Date.now(),
-      timestamp: new Date().toLocaleString(),
-      type,
-      message: type === "intrusion" ? messages[Math.floor(Math.random() * 2)] : messages[2],
-      sensor: sensors[Math.floor(Math.random() * sensors.length)],
-    };
+      // Determine alert type
+      let type: "intrusion" | "safe" = "safe";
+      let message = parsedData.raw || "Unknown event";
+      
+      if (parsedData.alert === "INTRUSION DETECTED" || parsedData.raw?.toUpperCase().includes("INTRUSION")) {
+        type = "intrusion";
+        message = parsedData.raw || "Intrusion detected";
+      }
 
-    setAlerts((prev) => [newAlert, ...prev].slice(0, 50));
-    setCurrentStatus(type === "intrusion" ? "alert" : "safe");
+      // Extract sensor info
+      let sensor = "Unknown Sensor";
+      if (parsedData.pir && parsedData.vibration) {
+        sensor = "Both Sensors";
+      } else if (parsedData.pir) {
+        sensor = "PIR Sensor";
+      } else if (parsedData.vibration) {
+        sensor = "Vibration Sensor";
+      }
 
-    // Log to Google Sheets
-    logAlertToSheets(newAlert);
+      const newAlert: Alert = {
+        id: Date.now() + Math.random(),
+        timestamp: parsedData.timestamp || new Date().toLocaleString(),
+        type,
+        message,
+        sensor,
+      };
 
-    if (type === "intrusion") {
+      setAlerts((prev) => [newAlert, ...prev].slice(0, 50));
+      setCurrentStatus(type === "intrusion" ? "alert" : "safe");
+
+      // Log to Google Sheets
+      logAlertToSheets(newAlert);
+
+      if (type === "intrusion") {
+        toast({
+          title: "⚠️ Intrusion Detected!",
+          description: message,
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      console.error('Error parsing WebSocket message:', error);
+    }
+  };
+
+  // Connect to WebSocket
+  const connectWebSocket = () => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      console.log('WebSocket already connected');
+      return;
+    }
+
+    try {
+      console.log('Connecting to WebSocket:', wsUrl);
+      const ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        console.log('WebSocket connected');
+        setIsConnected(true);
+        toast({
+          title: "Connected",
+          description: "Successfully connected to sensor system",
+        });
+      };
+
+      ws.onmessage = (event) => {
+        console.log('WebSocket message received:', event.data);
+        parseIncomingMessage(event.data);
+      };
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        toast({
+          title: "Connection Error",
+          description: "Failed to connect to sensor system",
+          variant: "destructive",
+        });
+      };
+
+      ws.onclose = () => {
+        console.log('WebSocket disconnected');
+        setIsConnected(false);
+        setIsMonitoring(false);
+        toast({
+          title: "Disconnected",
+          description: "Connection to sensor system closed",
+        });
+      };
+
+      wsRef.current = ws;
+    } catch (error) {
+      console.error('WebSocket connection error:', error);
       toast({
-        title: "⚠️ Intrusion Detected!",
-        description: newAlert.message,
+        title: "Connection Failed",
+        description: "Could not establish connection",
         variant: "destructive",
       });
     }
   };
 
-  useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (isMonitoring) {
-      interval = setInterval(simulateAlert, 5000);
+  // Disconnect WebSocket
+  const disconnectWebSocket = () => {
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+      setIsConnected(false);
+      setIsMonitoring(false);
     }
-    return () => clearInterval(interval);
-  }, [isMonitoring]);
+  };
+
+  useEffect(() => {
+    return () => {
+      disconnectWebSocket();
+    };
+  }, []);
 
   const startMonitoring = () => {
+    if (!isConnected) {
+      connectWebSocket();
+    }
     setIsMonitoring(true);
     toast({
       title: "Monitoring Started",
@@ -94,6 +181,7 @@ const Dashboard = () => {
   };
 
   const stopMonitoring = () => {
+    disconnectWebSocket();
     setIsMonitoring(false);
     setCurrentStatus("safe");
     toast({
@@ -114,6 +202,39 @@ const Dashboard = () => {
           </p>
         </div>
 
+        {/* WebSocket Configuration */}
+        <Card className="p-6 mb-6">
+          <div className="flex items-center gap-3 mb-4">
+            {isConnected ? (
+              <Wifi className="w-5 h-5 text-success" />
+            ) : (
+              <WifiOff className="w-5 h-5 text-muted-foreground" />
+            )}
+            <h2 className="text-xl font-bold">WebSocket Connection</h2>
+            <Badge variant={isConnected ? "default" : "secondary"}>
+              {isConnected ? "Connected" : "Disconnected"}
+            </Badge>
+          </div>
+          <div className="flex gap-3">
+            <Input
+              type="text"
+              value={wsUrl}
+              onChange={(e) => setWsUrl(e.target.value)}
+              placeholder="wss://your-ngrok-url.ngrok-free.dev"
+              disabled={isConnected}
+              className="flex-1"
+            />
+            {!isConnected && (
+              <Button onClick={connectWebSocket} variant="outline">
+                Connect
+              </Button>
+            )}
+          </div>
+          <p className="text-sm text-muted-foreground mt-2">
+            Enter your ngrok WebSocket URL (e.g., wss://unhurtful-drawn-tish.ngrok-free.dev)
+          </p>
+        </Card>
+
         {/* Status Card */}
         <Card className="p-8 mb-8">
           <div className="flex items-center justify-between mb-6">
@@ -129,7 +250,7 @@ const Dashboard = () => {
             
             <div className="flex gap-3">
               {!isMonitoring ? (
-                <Button onClick={startMonitoring} size="lg" className="shadow-glow">
+                <Button onClick={startMonitoring} size="lg" className="shadow-glow" disabled={!wsUrl}>
                   <Radio className="w-4 h-4 mr-2" />
                   Start Monitoring
                 </Button>

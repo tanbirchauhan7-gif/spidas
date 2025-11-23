@@ -24,11 +24,12 @@ serve(async (req) => {
 
     const webhookUrl = Deno.env.get('GOOGLE_SHEETS_WEBHOOK_URL');
     
-    if (!webhookUrl) {
-      console.error('GOOGLE_SHEETS_WEBHOOK_URL not configured');
+    // If webhook URL is not configured or invalid, just log and return success
+    if (!webhookUrl || webhookUrl === 'Monitor' || !webhookUrl.startsWith('http')) {
+      console.log('Google Sheets webhook not configured, skipping external logging');
       return new Response(
-        JSON.stringify({ error: 'Google Sheets webhook URL not configured' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ success: true, message: 'Alert received (Google Sheets logging disabled)' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
@@ -46,7 +47,11 @@ serve(async (req) => {
     if (!response.ok) {
       const errorText = await response.text();
       console.error('Google Sheets webhook error:', errorText);
-      throw new Error(`Failed to log to Google Sheets: ${response.status}`);
+      // Don't throw, just log the error
+      return new Response(
+        JSON.stringify({ success: true, message: 'Alert received (Google Sheets logging failed)', warning: errorText }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
     return new Response(
@@ -56,9 +61,10 @@ serve(async (req) => {
   } catch (error) {
     console.error('Error in log-alert function:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+    // Return 200 with error details instead of 500 to avoid breaking the dashboard
     return new Response(
-      JSON.stringify({ error: errorMessage }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({ success: false, error: errorMessage }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 });
