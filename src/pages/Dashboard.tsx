@@ -3,7 +3,9 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { AlertCircle, CheckCircle, Radio, Clock, Wifi, WifiOff } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
+import { AlertCircle, CheckCircle, Radio, Clock, Wifi, WifiOff, Lightbulb, LightbulbOff } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -21,7 +23,10 @@ const Dashboard = () => {
   const [currentStatus, setCurrentStatus] = useState<"safe" | "alert">("safe");
   const [wsUrl, setWsUrl] = useState("wss://unhurtful-drawn-tish.ngrok-free.dev");
   const [isConnected, setIsConnected] = useState(false);
+  const [ledStatus, setLedStatus] = useState(false);
+  const [autoOffTime, setAutoOffTime] = useState("30");
   const wsRef = useRef<WebSocket | null>(null);
+  const ledTimerRef = useRef<NodeJS.Timeout | null>(null);
   const { toast } = useToast();
 
   // Log alert to Google Sheets (optional)
@@ -87,6 +92,16 @@ const Dashboard = () => {
       logAlertToSheets(newAlert);
 
       if (type === "intrusion") {
+        setLedStatus(true);
+        
+        // Auto-off timer for LED
+        if (ledTimerRef.current) {
+          clearTimeout(ledTimerRef.current);
+        }
+        ledTimerRef.current = setTimeout(() => {
+          turnOffLed();
+        }, parseInt(autoOffTime) * 1000);
+
         toast({
           title: "⚠️ Intrusion Detected!",
           description: message,
@@ -153,6 +168,24 @@ const Dashboard = () => {
     }
   };
 
+  // Turn off LED
+  const turnOffLed = () => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      const command = { command: "LED_OFF" };
+      wsRef.current.send(JSON.stringify(command));
+      console.log('[Dashboard] Sent LED OFF command');
+    }
+    setLedStatus(false);
+    if (ledTimerRef.current) {
+      clearTimeout(ledTimerRef.current);
+      ledTimerRef.current = null;
+    }
+    toast({
+      title: "LED Turned Off",
+      description: "Alert LED has been deactivated",
+    });
+  };
+
   // Disconnect WebSocket
   const disconnectWebSocket = () => {
     if (wsRef.current) {
@@ -166,6 +199,9 @@ const Dashboard = () => {
   useEffect(() => {
     return () => {
       disconnectWebSocket();
+      if (ledTimerRef.current) {
+        clearTimeout(ledTimerRef.current);
+      }
     };
   }, []);
 
@@ -278,6 +314,65 @@ const Dashboard = () => {
               </div>
             </div>
           )}
+        </Card>
+
+        {/* LED Control Card */}
+        <Card className="p-6 mb-6">
+          <div className="flex items-center gap-3 mb-4">
+            {ledStatus ? (
+              <Lightbulb className="w-6 h-6 text-yellow-500" />
+            ) : (
+              <LightbulbOff className="w-6 h-6 text-muted-foreground" />
+            )}
+            <h2 className="text-xl font-bold">Alert LED Control</h2>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-4 mb-4">
+            <div className="bg-muted p-4 rounded-lg">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-medium mb-1">LED Status</p>
+                  <p className="text-sm text-muted-foreground">
+                    {ledStatus ? "Alert Active" : "Inactive"}
+                  </p>
+                </div>
+                <Badge variant={ledStatus ? "destructive" : "secondary"} className="text-lg px-4">
+                  {ledStatus ? "ON" : "OFF"}
+                </Badge>
+              </div>
+            </div>
+
+            <div className="bg-muted p-4 rounded-lg">
+              <Label className="text-sm font-medium mb-2 block">Auto-off Timer</Label>
+              <Select value={autoOffTime} onValueChange={setAutoOffTime}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="10">10 seconds</SelectItem>
+                  <SelectItem value="30">30 seconds</SelectItem>
+                  <SelectItem value="60">1 minute</SelectItem>
+                  <SelectItem value="120">2 minutes</SelectItem>
+                  <SelectItem value="300">5 minutes</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <Button
+            onClick={turnOffLed}
+            disabled={!ledStatus || !isConnected}
+            variant="outline"
+            size="lg"
+            className="w-full"
+          >
+            <LightbulbOff className="mr-2 h-5 w-5" />
+            Turn Off LED Manually
+          </Button>
+
+          <p className="text-sm text-muted-foreground mt-3">
+            LED will automatically turn off after the set timer or when manually switched off via phone/web
+          </p>
         </Card>
 
         {/* Alert Console */}
