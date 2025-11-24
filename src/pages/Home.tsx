@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Shield, Cpu, Radio, Lock, Brain, Database } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -5,6 +6,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Link } from "react-router-dom";
 
 const Home = () => {
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const features = [
     {
       icon: <Cpu className="w-8 h-8" />,
@@ -82,9 +84,13 @@ const Home = () => {
       <section className="container mx-auto px-4 pb-20">
         <div className="grid md:grid-cols-2 gap-6">
           {features.map((feature, index) => (
-            <Popover key={index}>
+            <Popover key={index} open={hoveredIndex === index}>
               <PopoverTrigger asChild>
-                <Card className="p-6 hover:shadow-glow transition-all duration-500 hover:-translate-y-2 cursor-pointer animate-fade-in hover-scale">
+                <Card 
+                  className="p-6 hover:shadow-glow transition-all duration-500 hover:-translate-y-2 cursor-pointer animate-fade-in hover-scale"
+                  onMouseEnter={() => setHoveredIndex(index)}
+                  onMouseLeave={() => setHoveredIndex(null)}
+                >
                   <div className="bg-gradient-primary w-12 h-12 rounded-lg flex items-center justify-center mb-4 text-white transition-transform duration-300 group-hover:rotate-12">
                     {feature.icon}
                   </div>
@@ -92,7 +98,11 @@ const Home = () => {
                   <p className="text-muted-foreground">{feature.description}</p>
                 </Card>
               </PopoverTrigger>
-              <PopoverContent className="w-80 bg-card/95 backdrop-blur-sm border-primary/20 shadow-glow animate-scale-in">
+              <PopoverContent 
+                className="w-80 bg-card/95 backdrop-blur-sm border-primary/20 shadow-glow animate-scale-in"
+                onMouseEnter={() => setHoveredIndex(index)}
+                onMouseLeave={() => setHoveredIndex(null)}
+              >
                 <div className="space-y-3">
                   <div className="flex items-center gap-3">
                     <div className="bg-gradient-primary w-10 h-10 rounded-lg flex items-center justify-center text-white">
