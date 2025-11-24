@@ -316,64 +316,6 @@ const Dashboard = () => {
           )}
         </Card>
 
-        {/* LED Control Card */}
-        <Card className="p-6 mb-6">
-          <div className="flex items-center gap-3 mb-4">
-            {ledStatus ? (
-              <Lightbulb className="w-6 h-6 text-yellow-500" />
-            ) : (
-              <LightbulbOff className="w-6 h-6 text-muted-foreground" />
-            )}
-            <h2 className="text-xl font-bold">Alert LED Control</h2>
-          </div>
-
-          <div className="grid md:grid-cols-2 gap-4 mb-4">
-            <div className="bg-muted p-4 rounded-lg">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="font-medium mb-1">LED Status</p>
-                  <p className="text-sm text-muted-foreground">
-                    {ledStatus ? "Alert Active" : "Inactive"}
-                  </p>
-                </div>
-                <Badge variant={ledStatus ? "destructive" : "secondary"} className="text-lg px-4">
-                  {ledStatus ? "ON" : "OFF"}
-                </Badge>
-              </div>
-            </div>
-
-            <div className="bg-muted p-4 rounded-lg">
-              <Label className="text-sm font-medium mb-2 block">Auto-off Timer</Label>
-              <Select value={autoOffTime} onValueChange={setAutoOffTime}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="10">10 seconds</SelectItem>
-                  <SelectItem value="30">30 seconds</SelectItem>
-                  <SelectItem value="60">1 minute</SelectItem>
-                  <SelectItem value="120">2 minutes</SelectItem>
-                  <SelectItem value="300">5 minutes</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          <Button
-            onClick={turnOffLed}
-            disabled={!ledStatus || !isConnected}
-            variant="outline"
-            size="lg"
-            className="w-full"
-          >
-            <LightbulbOff className="mr-2 h-5 w-5" />
-            Turn Off LED Manually
-          </Button>
-
-          <p className="text-sm text-muted-foreground mt-3">
-            LED will automatically turn off after the set timer or when manually switched off via phone/web
-          </p>
-        </Card>
 
         {/* Alert Console */}
         <Card className="p-6">
