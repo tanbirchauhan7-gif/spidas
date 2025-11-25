@@ -5,9 +5,11 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
-import { AlertCircle, CheckCircle, Radio, Clock, Wifi, WifiOff, Lightbulb, LightbulbOff } from "lucide-react";
+import { AlertCircle, CheckCircle, Radio, Clock, Wifi, WifiOff, Lightbulb, LightbulbOff, Camera, CameraOff } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import * as cocoSsd from "@tensorflow-models/coco-ssd";
+import "@tensorflow/tfjs";
 
 interface Alert {
   id: number;
@@ -25,29 +27,177 @@ const Dashboard = () => {
   const [isConnected, setIsConnected] = useState(false);
   const [ledStatus, setLedStatus] = useState(false);
   const [autoOffTime, setAutoOffTime] = useState("30");
+  const [isCameraActive, setIsCameraActive] = useState(false);
+  const [model, setModel] = useState<cocoSsd.ObjectDetection | null>(null);
+  const [detections, setDetections] = useState<cocoSsd.DetectedObject[]>([]);
+  const [lastClassification, setLastClassification] = useState<string>("");
   const wsRef = useRef<WebSocket | null>(null);
   const ledTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const animationFrameRef = useRef<number | null>(null);
   const { toast } = useToast();
 
-  // Log alert to Google Sheets (optional)
-  const logAlertToSheets = async (alert: Alert) => {
+  // Load COCO-SSD model on mount
+  useEffect(() => {
+    const loadModel = async () => {
+      try {
+        console.log("Loading COCO-SSD model...");
+        const loadedModel = await cocoSsd.load();
+        setModel(loadedModel);
+        console.log("COCO-SSD model loaded successfully");
+      } catch (error) {
+        console.error("Error loading COCO-SSD model:", error);
+        toast({
+          title: "Model Load Error",
+          description: "Failed to load object detection model",
+          variant: "destructive",
+        });
+      }
+    };
+    loadModel();
+  }, []);
+
+  // Start camera and detection
+  const startCamera = async () => {
     try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { width: 640, height: 480 } 
+      });
+      
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.onloadedmetadata = () => {
+          videoRef.current?.play();
+          setIsCameraActive(true);
+          detectObjects();
+        };
+      }
+    } catch (error) {
+      console.error("Error accessing camera:", error);
+      toast({
+        title: "Camera Access Error",
+        description: "Could not access camera. Please check permissions.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Stop camera
+  const stopCamera = () => {
+    if (videoRef.current?.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream;
+      stream.getTracks().forEach(track => track.stop());
+      videoRef.current.srcObject = null;
+    }
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+    }
+    setIsCameraActive(false);
+    setDetections([]);
+  };
+
+  // Detect objects in video feed
+  const detectObjects = async () => {
+    if (!model || !videoRef.current || !canvasRef.current || !isCameraActive) return;
+
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+
+    if (!ctx || video.readyState !== 4) {
+      animationFrameRef.current = requestAnimationFrame(detectObjects);
+      return;
+    }
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    try {
+      const predictions = await model.detect(video);
+      setDetections(predictions);
+
+      // Clear canvas
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Draw bounding boxes
+      predictions.forEach((prediction) => {
+        const [x, y, width, height] = prediction.bbox;
+        
+        // Determine color based on class
+        let color = "#00ff00";
+        if (prediction.class === "person") color = "#ff0000";
+        else if (["dog", "cat", "bird", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe"].includes(prediction.class)) {
+          color = "#ff9900";
+        }
+
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
+        ctx.strokeRect(x, y, width, height);
+
+        // Draw label background
+        ctx.fillStyle = color;
+        const label = `${prediction.class} (${Math.round(prediction.score * 100)}%)`;
+        ctx.font = "18px Arial";
+        const textWidth = ctx.measureText(label).width;
+        ctx.fillRect(x, y - 25, textWidth + 10, 25);
+
+        // Draw label text
+        ctx.fillStyle = "#000000";
+        ctx.fillText(label, x + 5, y - 7);
+      });
+
+      // Classify detection type
+      const hasHuman = predictions.some(p => p.class === "person");
+      const hasAnimal = predictions.some(p => 
+        ["dog", "cat", "bird", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe"].includes(p.class)
+      );
+      
+      let classification = "Unknown";
+      if (hasHuman) classification = "Human";
+      else if (hasAnimal) classification = "Animal";
+      else if (predictions.length > 0) classification = "Object";
+      
+      setLastClassification(classification);
+
+    } catch (error) {
+      console.error("Detection error:", error);
+    }
+
+    animationFrameRef.current = requestAnimationFrame(detectObjects);
+  };
+
+  // Capture snapshot and send to logging
+  const captureAndLogSnapshot = async (alert: Alert) => {
+    if (!canvasRef.current) return;
+
+    try {
+      // Capture snapshot as base64
+      const snapshot = canvasRef.current.toDataURL("image/jpeg", 0.8);
+      
+      // Send to logging with classification
       const { error } = await supabase.functions.invoke('log-alert', {
         body: {
           timestamp: alert.timestamp,
           type: alert.type,
           message: alert.message,
           sensor: alert.sensor,
+          classification: lastClassification,
+          detections: detections.map(d => ({
+            class: d.class,
+            score: d.score,
+          })),
+          snapshot: snapshot,
         },
       });
 
       if (error) {
-        console.warn('Failed to log alert to Google Sheets:', error);
+        console.warn('Failed to log alert with snapshot:', error);
       } else {
-        console.log('Alert logged to Google Sheets successfully');
+        console.log('Alert with snapshot logged successfully');
       }
     } catch (err) {
-      console.warn('Google Sheets logging unavailable:', err);
+      console.warn('Snapshot logging error:', err);
     }
   };
 
@@ -88,10 +238,17 @@ const Dashboard = () => {
       setAlerts((prev) => [newAlert, ...prev].slice(0, 50));
       setCurrentStatus(type === "intrusion" ? "alert" : "safe");
 
-      // Log to Google Sheets
-      logAlertToSheets(newAlert);
-
       if (type === "intrusion") {
+        // Start camera for intrusion detection
+        if (!isCameraActive && model) {
+          startCamera();
+        }
+        
+        // Wait a moment for detection, then capture and log
+        setTimeout(() => {
+          captureAndLogSnapshot(newAlert);
+        }, 2000);
+        
         setLedStatus(true);
         
         // Auto-off timer for LED
@@ -198,12 +355,20 @@ const Dashboard = () => {
 
   useEffect(() => {
     return () => {
+      stopCamera();
       disconnectWebSocket();
       if (ledTimerRef.current) {
         clearTimeout(ledTimerRef.current);
       }
     };
   }, []);
+
+  // Update detection loop when camera state changes
+  useEffect(() => {
+    if (isCameraActive && model) {
+      detectObjects();
+    }
+  }, [isCameraActive, model]);
 
   const startMonitoring = () => {
     if (!isConnected) {
@@ -316,6 +481,74 @@ const Dashboard = () => {
           )}
         </Card>
 
+
+        {/* Camera Detection */}
+        {isMonitoring && (
+          <Card className="p-6 mb-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <Camera className="w-6 h-6 text-primary" />
+                <h2 className="text-2xl font-bold">Live Detection</h2>
+                {lastClassification && (
+                  <Badge variant={lastClassification === "Human" ? "destructive" : "default"}>
+                    {lastClassification} Detected
+                  </Badge>
+                )}
+              </div>
+              <Button 
+                onClick={isCameraActive ? stopCamera : startCamera}
+                variant={isCameraActive ? "destructive" : "default"}
+                disabled={!model}
+              >
+                {isCameraActive ? (
+                  <>
+                    <CameraOff className="w-4 h-4 mr-2" />
+                    Stop Camera
+                  </>
+                ) : (
+                  <>
+                    <Camera className="w-4 h-4 mr-2" />
+                    Start Camera
+                  </>
+                )}
+              </Button>
+            </div>
+
+            <div className="relative bg-black rounded-lg overflow-hidden" style={{ aspectRatio: "4/3" }}>
+              <video
+                ref={videoRef}
+                className="w-full h-full"
+                playsInline
+                muted
+              />
+              <canvas
+                ref={canvasRef}
+                className="absolute top-0 left-0 w-full h-full"
+              />
+              {!isCameraActive && (
+                <div className="absolute inset-0 flex items-center justify-center text-muted-foreground">
+                  <div className="text-center">
+                    <Camera className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                    <p>Camera inactive</p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {detections.length > 0 && (
+              <div className="mt-4 space-y-2">
+                <h3 className="font-semibold">Detected Objects:</h3>
+                <div className="flex flex-wrap gap-2">
+                  {detections.map((det, idx) => (
+                    <Badge key={idx} variant="outline">
+                      {det.class}: {Math.round(det.score * 100)}%
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+          </Card>
+        )}
 
         {/* Alert Console */}
         <Card className="p-6">
