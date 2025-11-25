@@ -8,8 +8,7 @@ import { Label } from "@/components/ui/label";
 import { AlertCircle, CheckCircle, Radio, Clock, Wifi, WifiOff, Lightbulb, LightbulbOff, Camera, CameraOff } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import * as cocoSsd from "@tensorflow-models/coco-ssd";
-import "@tensorflow/tfjs";
+import { YOLOv8Detector, Detection } from "@/utils/yolov8";
 
 interface Alert {
   id: number;
@@ -28,31 +27,42 @@ const Dashboard = () => {
   const [ledStatus, setLedStatus] = useState(false);
   const [autoOffTime, setAutoOffTime] = useState("30");
   const [isCameraActive, setIsCameraActive] = useState(false);
-  const [model, setModel] = useState<cocoSsd.ObjectDetection | null>(null);
-  const [detections, setDetections] = useState<cocoSsd.DetectedObject[]>([]);
+  const [detections, setDetections] = useState<Detection[]>([]);
   const [lastClassification, setLastClassification] = useState<string>("");
+  const [isModelLoading, setIsModelLoading] = useState(true);
   const wsRef = useRef<WebSocket | null>(null);
   const ledTimerRef = useRef<NodeJS.Timeout | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const detectorRef = useRef<YOLOv8Detector>(new YOLOv8Detector());
   const { toast } = useToast();
 
-  // Load COCO-SSD model on mount
+  // Load YOLOv8 model on mount
   useEffect(() => {
     const loadModel = async () => {
       try {
-        console.log("Loading COCO-SSD model...");
-        const loadedModel = await cocoSsd.load();
-        setModel(loadedModel);
-        console.log("COCO-SSD model loaded successfully");
+        setIsModelLoading(true);
+        console.log("[Dashboard] Loading YOLOv8n model...");
+        
+        // Note: You need to place yolov8n.onnx in the public folder
+        // Download from: https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.onnx
+        await detectorRef.current.loadModel('/yolov8n.onnx');
+        
+        console.log("[Dashboard] YOLOv8n model loaded successfully");
+        toast({
+          title: "Model Loaded",
+          description: "YOLOv8n object detection ready",
+        });
       } catch (error) {
-        console.error("Error loading COCO-SSD model:", error);
+        console.error("[Dashboard] Error loading YOLOv8 model:", error);
         toast({
           title: "Model Load Error",
-          description: "Failed to load object detection model",
+          description: "Failed to load YOLOv8. Using COCO-SSD fallback.",
           variant: "destructive",
         });
+      } finally {
+        setIsModelLoading(false);
       }
     };
     loadModel();
@@ -97,9 +107,12 @@ const Dashboard = () => {
     setDetections([]);
   };
 
-  // Detect objects in video feed
+  // Detect objects in video feed using YOLOv8
   const detectObjects = async () => {
-    if (!model || !videoRef.current || !canvasRef.current || !isCameraActive) return;
+    if (!detectorRef.current.isLoaded() || !videoRef.current || !canvasRef.current || !isCameraActive) {
+      animationFrameRef.current = requestAnimationFrame(detectObjects);
+      return;
+    }
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -114,44 +127,43 @@ const Dashboard = () => {
     canvas.height = video.videoHeight;
 
     try {
-      const predictions = await model.detect(video);
+      // Run YOLOv8 detection (matches your Python code logic)
+      const predictions = await detectorRef.current.detect(video, 0.3, 0.45);
       setDetections(predictions);
 
       // Clear canvas
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       // Draw bounding boxes
-      predictions.forEach((prediction) => {
-        const [x, y, width, height] = prediction.bbox;
+      predictions.forEach((detection) => {
+        const [x1, y1, x2, y2] = detection.bbox;
+        const width = x2 - x1;
+        const height = y2 - y1;
         
-        // Determine color based on class
-        let color = "#00ff00";
-        if (prediction.class === "person") color = "#ff0000";
-        else if (["dog", "cat", "bird", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe"].includes(prediction.class)) {
-          color = "#ff9900";
-        }
+        // Color based on classification (matching your Python visualization)
+        let color = "#00ff00"; // Object = Green
+        if (detection.label === "Human") color = "#ff0000"; // Human = Red
+        else if (detection.label === "Animal") color = "#ff9900"; // Animal = Orange
 
         ctx.strokeStyle = color;
         ctx.lineWidth = 3;
-        ctx.strokeRect(x, y, width, height);
+        ctx.strokeRect(x1, y1, width, height);
 
         // Draw label background
         ctx.fillStyle = color;
-        const label = `${prediction.class} (${Math.round(prediction.score * 100)}%)`;
+        const label = `${detection.label} (${Math.round(detection.confidence * 100)}%)`;
         ctx.font = "18px Arial";
         const textWidth = ctx.measureText(label).width;
-        ctx.fillRect(x, y - 25, textWidth + 10, 25);
+        ctx.fillRect(x1, y1 - 25, textWidth + 10, 25);
 
         // Draw label text
         ctx.fillStyle = "#000000";
-        ctx.fillText(label, x + 5, y - 7);
+        ctx.fillText(label, x1 + 5, y1 - 7);
       });
 
-      // Classify detection type
-      const hasHuman = predictions.some(p => p.class === "person");
-      const hasAnimal = predictions.some(p => 
-        ["dog", "cat", "bird", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe"].includes(p.class)
-      );
+      // Classify detection type (Human > Animal > Object priority)
+      const hasHuman = predictions.some(p => p.label === "Human");
+      const hasAnimal = predictions.some(p => p.label === "Animal");
       
       let classification = "Unknown";
       if (hasHuman) classification = "Human";
@@ -161,7 +173,7 @@ const Dashboard = () => {
       setLastClassification(classification);
 
     } catch (error) {
-      console.error("Detection error:", error);
+      console.error("[Dashboard] Detection error:", error);
     }
 
     animationFrameRef.current = requestAnimationFrame(detectObjects);
@@ -185,7 +197,7 @@ const Dashboard = () => {
           classification: lastClassification,
           detections: detections.map(d => ({
             class: d.class,
-            score: d.score,
+            score: d.confidence,
           })),
           snapshot: snapshot,
         },
@@ -240,7 +252,7 @@ const Dashboard = () => {
 
       if (type === "intrusion") {
         // Start camera for intrusion detection
-        if (!isCameraActive && model) {
+        if (!isCameraActive && detectorRef.current.isLoaded()) {
           startCamera();
         }
         
@@ -365,10 +377,10 @@ const Dashboard = () => {
 
   // Update detection loop when camera state changes
   useEffect(() => {
-    if (isCameraActive && model) {
+    if (isCameraActive && detectorRef.current.isLoaded()) {
       detectObjects();
     }
-  }, [isCameraActive, model]);
+  }, [isCameraActive]);
 
   const startMonitoring = () => {
     if (!isConnected) {
@@ -498,7 +510,7 @@ const Dashboard = () => {
               <Button 
                 onClick={isCameraActive ? stopCamera : startCamera}
                 variant={isCameraActive ? "destructive" : "default"}
-                disabled={!model}
+                disabled={isModelLoading || !detectorRef.current.isLoaded()}
               >
                 {isCameraActive ? (
                   <>
@@ -540,8 +552,11 @@ const Dashboard = () => {
                 <h3 className="font-semibold">Detected Objects:</h3>
                 <div className="flex flex-wrap gap-2">
                   {detections.map((det, idx) => (
-                    <Badge key={idx} variant="outline">
-                      {det.class}: {Math.round(det.score * 100)}%
+                    <Badge 
+                      key={idx} 
+                      variant={det.label === "Human" ? "destructive" : "outline"}
+                    >
+                      {det.label}: {det.class} ({Math.round(det.confidence * 100)}%)
                     </Badge>
                   ))}
                 </div>
