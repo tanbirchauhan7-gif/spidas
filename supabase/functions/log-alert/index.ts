@@ -10,6 +10,12 @@ interface AlertData {
   type: string;
   message: string;
   sensor: string;
+  classification?: string;
+  detections?: Array<{
+    class: string;
+    score: number;
+  }>;
+  snapshot?: string;
 }
 
 serve(async (req) => {
