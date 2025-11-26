@@ -8,7 +8,9 @@ import { Label } from "@/components/ui/label";
 import { AlertCircle, CheckCircle, Radio, Clock, Wifi, WifiOff, Lightbulb, LightbulbOff, Camera, CameraOff } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import { YOLOv8Detector, Detection } from "@/utils/yolov8";
+import { YOLOv8Detector, Detection, mapToThreeClasses } from "@/utils/yolov8";
+import * as cocoSsd from "@tensorflow-models/coco-ssd";
+import "@tensorflow/tfjs";
 
 interface Alert {
   id: number;
@@ -30,37 +32,50 @@ const Dashboard = () => {
   const [detections, setDetections] = useState<Detection[]>([]);
   const [lastClassification, setLastClassification] = useState<string>("");
   const [isModelLoading, setIsModelLoading] = useState(true);
+  const [usingYOLOv8, setUsingYOLOv8] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const ledTimerRef = useRef<NodeJS.Timeout | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationFrameRef = useRef<number | null>(null);
   const detectorRef = useRef<YOLOv8Detector>(new YOLOv8Detector());
+  const cocoModelRef = useRef<cocoSsd.ObjectDetection | null>(null);
   const { toast } = useToast();
 
-  // Load YOLOv8 model on mount
+  // Load models on mount (try YOLOv8, fallback to COCO-SSD)
   useEffect(() => {
     const loadModel = async () => {
       try {
         setIsModelLoading(true);
-        console.log("[Dashboard] Loading YOLOv8n model...");
+        console.log("[Dashboard] Attempting to load YOLOv8n model...");
         
-        // Note: You need to place yolov8n.onnx in the public folder
-        // Download from: https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.onnx
         await detectorRef.current.loadModel('/yolov8n.onnx');
         
-        console.log("[Dashboard] YOLOv8n model loaded successfully");
+        console.log("[Dashboard] YOLOv8n loaded successfully");
+        setUsingYOLOv8(true);
         toast({
           title: "Model Loaded",
-          description: "YOLOv8n object detection ready",
+          description: "YOLOv8n detection active",
         });
       } catch (error) {
-        console.error("[Dashboard] Error loading YOLOv8 model:", error);
-        toast({
-          title: "Model Load Error",
-          description: "Failed to load YOLOv8. Using COCO-SSD fallback.",
-          variant: "destructive",
-        });
+        console.log("[Dashboard] YOLOv8 unavailable, loading COCO-SSD fallback...");
+        
+        try {
+          const cocoModel = await cocoSsd.load();
+          cocoModelRef.current = cocoModel;
+          console.log("[Dashboard] COCO-SSD loaded successfully");
+          toast({
+            title: "Model Loaded",
+            description: "COCO-SSD detection active (add yolov8n.onnx for YOLOv8)",
+          });
+        } catch (cocoError) {
+          console.error("[Dashboard] Failed to load any model:", cocoError);
+          toast({
+            title: "Model Load Error",
+            description: "Failed to load detection models",
+            variant: "destructive",
+          });
+        }
       } finally {
         setIsModelLoading(false);
       }
@@ -107,9 +122,11 @@ const Dashboard = () => {
     setDetections([]);
   };
 
-  // Detect objects in video feed using YOLOv8
+  // Detect objects in video feed (YOLOv8 or COCO-SSD)
   const detectObjects = async () => {
-    if (!detectorRef.current.isLoaded() || !videoRef.current || !canvasRef.current || !isCameraActive) {
+    const hasModel = usingYOLOv8 ? detectorRef.current.isLoaded() : cocoModelRef.current !== null;
+    
+    if (!hasModel || !videoRef.current || !canvasRef.current || !isCameraActive) {
       animationFrameRef.current = requestAnimationFrame(detectObjects);
       return;
     }
@@ -127,8 +144,22 @@ const Dashboard = () => {
     canvas.height = video.videoHeight;
 
     try {
-      // Run YOLOv8 detection (matches your Python code logic)
-      const predictions = await detectorRef.current.detect(video, 0.3, 0.45);
+      let predictions: Detection[];
+
+      if (usingYOLOv8) {
+        // Use YOLOv8 (your custom model logic)
+        predictions = await detectorRef.current.detect(video, 0.3, 0.45);
+      } else {
+        // Use COCO-SSD fallback
+        const cocoResults = await cocoModelRef.current!.detect(video);
+        predictions = cocoResults.map(pred => ({
+          class: pred.class,
+          confidence: pred.score,
+          bbox: [pred.bbox[0], pred.bbox[1], pred.bbox[0] + pred.bbox[2], pred.bbox[1] + pred.bbox[3]] as [number, number, number, number],
+          label: mapToThreeClasses(pred.class)
+        }));
+      }
+
       setDetections(predictions);
 
       // Clear canvas
@@ -140,7 +171,7 @@ const Dashboard = () => {
         const width = x2 - x1;
         const height = y2 - y1;
         
-        // Color based on classification (matching your Python visualization)
+        // Color based on classification
         let color = "#00ff00"; // Object = Green
         if (detection.label === "Human") color = "#ff0000"; // Human = Red
         else if (detection.label === "Animal") color = "#ff9900"; // Animal = Orange
@@ -161,7 +192,7 @@ const Dashboard = () => {
         ctx.fillText(label, x1 + 5, y1 - 7);
       });
 
-      // Classify detection type (Human > Animal > Object priority)
+      // Classify detection type
       const hasHuman = predictions.some(p => p.label === "Human");
       const hasAnimal = predictions.some(p => p.label === "Animal");
       
@@ -252,7 +283,8 @@ const Dashboard = () => {
 
       if (type === "intrusion") {
         // Start camera for intrusion detection
-        if (!isCameraActive && detectorRef.current.isLoaded()) {
+        const hasModel = usingYOLOv8 ? detectorRef.current.isLoaded() : cocoModelRef.current !== null;
+        if (!isCameraActive && hasModel) {
           startCamera();
         }
         
@@ -377,10 +409,11 @@ const Dashboard = () => {
 
   // Update detection loop when camera state changes
   useEffect(() => {
-    if (isCameraActive && detectorRef.current.isLoaded()) {
+    const hasModel = usingYOLOv8 ? detectorRef.current.isLoaded() : cocoModelRef.current !== null;
+    if (isCameraActive && hasModel) {
       detectObjects();
     }
-  }, [isCameraActive]);
+  }, [isCameraActive, usingYOLOv8]);
 
   const startMonitoring = () => {
     if (!isConnected) {
@@ -510,7 +543,7 @@ const Dashboard = () => {
               <Button 
                 onClick={isCameraActive ? stopCamera : startCamera}
                 variant={isCameraActive ? "destructive" : "default"}
-                disabled={isModelLoading || !detectorRef.current.isLoaded()}
+                disabled={isModelLoading}
               >
                 {isCameraActive ? (
                   <>
@@ -524,6 +557,19 @@ const Dashboard = () => {
                   </>
                 )}
               </Button>
+            </div>
+
+            <div className="mb-3 flex items-center gap-2 text-sm text-muted-foreground">
+              <span className="font-medium">Model:</span>
+              <Badge variant="outline">{usingYOLOv8 ? "YOLOv8n" : "COCO-SSD"}</Badge>
+              {lastClassification && (
+                <>
+                  <span className="ml-2">Last:</span>
+                  <Badge variant={lastClassification === "Human" ? "destructive" : "secondary"}>
+                    {lastClassification}
+                  </Badge>
+                </>
+              )}
             </div>
 
             <div className="relative bg-black rounded-lg overflow-hidden" style={{ aspectRatio: "4/3" }}>
