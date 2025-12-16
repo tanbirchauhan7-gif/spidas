@@ -182,7 +182,7 @@ const Dashboard = () => {
 
         // Draw label background
         ctx.fillStyle = color;
-        const label = `${detection.label} (${Math.round(detection.confidence * 100)}%)`;
+        const label = detection.label;
         ctx.font = "18px Arial";
         const textWidth = ctx.measureText(label).width;
         ctx.fillRect(x1, y1 - 25, textWidth + 10, 25);
