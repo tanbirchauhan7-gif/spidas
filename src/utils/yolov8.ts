@@ -63,7 +63,7 @@ export class YOLOv8Detector {
 
   async detect(
     imageElement: HTMLImageElement | HTMLVideoElement,
-    confThreshold: number = 0.3,
+    confThreshold: number = 0.2,
     iouThreshold: number = 0.45
   ): Promise<Detection[]> {
     if (!this.session || !this.modelLoaded) {
@@ -146,15 +146,36 @@ export class YOLOv8Detector {
     const yScale = imgHeight / 640;
     
     for (let i = 0; i < numDetections; i++) {
-      // Get class scores
-      let maxScore = 0;
-      let maxClassId = 0;
+      // Get ALL class scores above a lower threshold to find alternatives
+      const classScores: { classId: number; score: number }[] = [];
       
       for (let j = 0; j < numClasses; j++) {
         const score = output[i + (4 + j) * numDetections];
-        if (score > maxScore) {
-          maxScore = score;
-          maxClassId = j;
+        if (score > confThreshold * 0.5) { // Collect more candidates
+          classScores.push({ classId: j, score });
+        }
+      }
+      
+      if (classScores.length === 0) continue;
+      
+      // Sort by score descending
+      classScores.sort((a, b) => b.score - a.score);
+      
+      let maxScore = classScores[0].score;
+      let maxClassId = classScores[0].classId;
+      
+      // If top detection is "person", check if there's a competitive animal class
+      // This helps when showing animal pictures on phone screens
+      if (COCO_CLASSES[maxClassId] === "person" && classScores.length > 1) {
+        for (const candidate of classScores.slice(1)) {
+          const candidateClass = COCO_CLASSES[candidate.classId];
+          // If there's an animal class with at least 50% of the person score, prefer it
+          if (ANIMAL_CLASSES.has(candidateClass) && candidate.score > maxScore * 0.5) {
+            maxClassId = candidate.classId;
+            maxScore = candidate.score;
+            console.log(`[YOLOv8] Preferring ${candidateClass} (${candidate.score.toFixed(2)}) over person`);
+            break;
+          }
         }
       }
       
