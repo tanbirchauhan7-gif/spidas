@@ -14,8 +14,6 @@ const Navigation = () => {
     { path: "/aes", label: "AES Demo" },
     { path: "/dashboard", label: "Alert Dashboard" },
     { path: "/ml", label: "ML Model" },
-    { path: "/gallery", label: "Gallery" },
-    { path: "/team", label: "Team" },
   ];
 
   return (
